@@ -16,11 +16,7 @@ backend:
   # config options: https://node-postgres.com/apis/client
   database:
     client: pg
-    connection:
-      host: ${POSTGRES_HOST}
-      port: ${POSTGRES_PORT}
-      user: ${POSTGRES_USER}
-      password: ${POSTGRES_PASSWORD}
+    connection: ${DATABASE_URL}
       # https://node-postgres.com/features/ssl
       # you can set the sslmode configuration option via the `PGSSLMODE` environment variable
       # see https://www.postgresql.org/docs/current/libpq-ssl.html Table 33.1. SSL Mode Descriptions (e.g. require)
@@ -30,26 +26,31 @@ backend:
 
 auth:
   providers:
-    guest: {}
+    guest:
+      dangerouslyAllowOutsideDevelopment: true
 
 catalog:
   # Overrides the default list locations from app-config.yaml as these contain example data.
   # See https://backstage.io/docs/features/software-catalog/#adding-components-to-the-catalog for more details
   # on how to get entities into the catalog.
   locations:
-    # Local example data, replace this with your production config, these are intended for demo use only.
-    # File locations are relative to the backend process, typically in a deployed context, such as in a Docker container, this will be the root
+    # Local example data, file locations are relative to the backend process, typically `packages/backend`
     - type: file
-      target: ./examples/entities.yaml
+      target: /app/examples/entities.yaml
 
     # Local example template
     - type: file
-      target: ./examples/template/template.yaml
+      target: /app/examples/template/template.yaml
       rules:
         - allow: [Template]
 
     # Local example organizational data
     - type: file
-      target: ./examples/org.yaml
+      target: /app/examples/org.yaml
       rules:
         - allow: [User, Group]
+
+    - type: file
+      target: /app/examples/express-template/template.yaml
+      rules:
+        - allow: [Template]
