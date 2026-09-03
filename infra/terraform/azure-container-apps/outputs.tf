@@ -22,3 +22,9 @@ output "container_app_latest_revision_fqdn" {
   description = "FQDN of the latest active revision (useful for debugging revision-specific issues)."
   value       = azurerm_container_app.backstage.latest_revision_fqdn
 }
+
+output "backend_auth_secret" {
+  description = "Generated value for backend.auth.keys[0].secret. Not wired into the Container App by Terraform (see the comment on random_password.backend_auth_secret in main.tf) - set it manually as BACKEND_AUTH_SECRET, same as DATABASE_URL. Retrieve with: terraform output -raw backend_auth_secret"
+  value       = random_password.backend_auth_secret.result
+  sensitive   = true
+}

@@ -30,6 +30,25 @@ locals {
   app_base_url = "https://${var.app_name}.${azurerm_container_app_environment.backstage.default_domain}"
 }
 
+# Signing key for Backstage's internal service-to-service auth
+# (backend.auth.keys[0].secret in app-config.production.yaml).
+#
+# This is generated here (so you don't have to invent a random value by
+# hand) but is deliberately NOT wired into azurerm_container_app.backstage's
+# `secret`/`env` blocks below. Those lists are ignored post-create (see the
+# lifecycle block) specifically so a manually-added DATABASE_URL survives
+# future applies - but "ignored" is all-or-nothing per attribute, so
+# briefly un-ignoring env to add this secret would just as easily delete
+# DATABASE_URL in the same apply (confirmed: a real plan against this
+# module's live state showed exactly that). So set this one the same way
+# you set DATABASE_URL: manually, via the Portal or `az containerapp
+# secret set` / `az containerapp update --set-env-vars`, using the value
+# from `terraform output -raw backend_auth_secret`.
+resource "random_password" "backend_auth_secret" {
+  length  = 32
+  special = false
+}
+
 resource "azurerm_container_app" "backstage" {
   name                         = var.app_name
   resource_group_name          = azurerm_resource_group.backstage.name
@@ -95,9 +114,18 @@ resource "azurerm_container_app" "backstage" {
     # make to the ghcr-pat secret itself. To rotate that PAT later, either
     # remove this ignore temporarily and re-apply, or update it directly in
     # the portal/CLI to match what's already running.
+    #
+    # The three probe blocks are also ignored: when no custom probes are
+    # declared, Azure Container Apps auto-assigns default TCP
+    # readiness/liveness/startup probes server-side. Without ignoring them,
+    # every plan wants to delete Azure's own defaults - a real regression
+    # (no more health checks), not actual drift to fix.
     ignore_changes = [
       secret,
       template[0].container[0].env,
+      template[0].container[0].liveness_probe,
+      template[0].container[0].readiness_probe,
+      template[0].container[0].startup_probe,
     ]
   }
 }
