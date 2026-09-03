@@ -56,3 +56,14 @@ e2e-test-report/
 .cache/
 backstage.db
 db/
+
+# Terraform
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfplan
+**/tfplan
+**/*.tfvars
+**/*.tfvars.json
+!**/*.tfvars.example
+# Note: .terraform.lock.hcl is intentionally NOT ignored - commit it.
