@@ -52,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.image.outputs.name }}
-      sha_tag: ${{ steps.meta.outputs.version }}
+      sha_tag: ${{ steps.image.outputs.short_sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -76,11 +76,20 @@ jobs:
       - name: Build backend bundle
         run: yarn build:backend
 
+      # short_sha is computed explicitly here, independent of
+      # docker/metadata-action's tag list below - its `version` output
+      # picks by its own priority rules (raw > sha), so on main it resolves
+      # to "latest" rather than the commit's short SHA (confirmed: shipped
+      # this exact bug once already - the deploy job below ended up passing
+      # `--image ...:latest`, i.e. the whole thing this workflow exists to
+      # avoid). Don't reintroduce a dependency on that output for anything
+      # that needs to name one specific, unambiguous build.
       - name: Compute image name
         id: image
         run: |
           owner="${{ github.repository_owner }}"
           echo "name=${REGISTRY}/${owner,,}/backstage" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       # Uses the same GHCR PAT the Terraform module pulls with, not
       # GITHUB_TOKEN: this package was first created by a manual push under
