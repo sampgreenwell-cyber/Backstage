@@ -36,6 +36,7 @@ backend:
       #     $file: <file-path>/ca/server.crt
 
 auth:
+  environment: production
   providers:
     guest:
       dangerouslyAllowOutsideDevelopment: true
