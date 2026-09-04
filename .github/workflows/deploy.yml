@@ -1,19 +1,26 @@
 name: Build and Deploy Backstage
 
-# Builds the backend Docker image and pushes it to GHCR, then runs
-# `terraform plan` against the Azure Container Apps module in
-# infra/terraform/azure-container-apps for visibility/review.
+# Builds the backend Docker image, pushes it to GHCR tagged with the short
+# git SHA, and (on push to main) points the running Container App at that
+# exact image via `az containerapp update --image`. Also runs
+# `terraform plan` for visibility on every push/PR.
 #
-# NOTE: terraform apply is NOT run here. The module currently uses local
-# state (a .tfstate file on the operator's machine, gitignored) rather than
-# a shared remote backend, so an ephemeral GitHub Actions runner has no way
-# to know what's already deployed - an apply from CI would either fail
-# (resources already exist) or drift against real state. Until this module
-# moves to a remote azurerm backend (Storage Account + blob container),
-# actually applying stays a manual step:
+# Deliberately does NOT run terraform apply. The module uses local state (a
+# .tfstate file on the operator's machine, gitignored) rather than a shared
+# remote backend, so an ephemeral GitHub Actions runner has no way to know
+# what infrastructure already exists - an apply from CI would either fail
+# (resources already exist) or drift against real state. That's why day-2
+# image deploys go through `az containerapp update` above instead of
+# Terraform: it needs no state at all, just talks to the live resource -
+# see the `deploy` job below. Infra-only changes (CPU/memory, ingress,
+# scaling, etc.) still go through a manual `terraform apply`:
 #
 #   cd infra/terraform/azure-container-apps
-#   terraform apply -var="container_image=ghcr.io/<owner>/backstage:<sha-or-tag>"
+#   terraform apply
+#
+# (`template[0].container[0].image` is in that resource's ignore_changes
+# for exactly this reason - so a manual infra apply doesn't undo whatever
+# image this workflow most recently deployed.)
 #
 # DATABASE_URL and other runtime secrets are NOT set here either - they're
 # managed by hand in the Azure Portal (see
@@ -33,6 +40,11 @@ permissions:
 env:
   REGISTRY: ghcr.io
   TF_WORKING_DIR: infra/terraform/azure-container-apps
+  # Must match infra/terraform/azure-container-apps' resource_group_name /
+  # app_name variable defaults - this workflow updates the same Container
+  # App Terraform provisions, without going through Terraform.
+  AZURE_RESOURCE_GROUP: rg-backstage
+  CONTAINER_APP_NAME: backstage
 
 jobs:
   build-and-push:
@@ -40,6 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.image.outputs.name }}
+      sha_tag: ${{ steps.meta.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -116,7 +129,7 @@ jobs:
       ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       TF_VAR_ghcr_pat: ${{ secrets.GHCR_PAT }}
-      TF_VAR_container_image: ${{ needs.build-and-push.outputs.image }}:${{ github.sha }}
+      TF_VAR_container_image: ${{ needs.build-and-push.outputs.image }}:${{ needs.build-and-push.outputs.sha_tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -145,3 +158,36 @@ jobs:
 
       # No apply step - see note at the top of this file: local state means
       # applying from CI isn't safe until this module has a remote backend.
+
+  deploy:
+    name: Deploy image to Azure Container Apps
+    needs: build-and-push
+    # Only main pushes actually update the running app - PR/dispatch runs
+    # stop at build-and-push (image still gets pushed, tagged with that
+    # commit's short SHA, so it's available to deploy manually if needed).
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: >-
+            {"clientId":"${{ secrets.AZURE_CLIENT_ID }}",
+            "clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}",
+            "subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+            "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
+
+      - name: Install containerapp CLI extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      # Pinning to the exact tag just pushed (not :latest) is what actually
+      # fixes the "pushed but Azure didn't pick it up" problem: Container
+      # Apps only creates a new revision when the image *reference* string
+      # changes, and :latest never changes even though its content does.
+      - name: Update Container App image
+        run: |
+          az containerapp update \
+            --name "${{ env.CONTAINER_APP_NAME }}" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+            --image "${{ needs.build-and-push.outputs.image }}:${{ needs.build-and-push.outputs.sha_tag }}" \
+            --only-show-errors

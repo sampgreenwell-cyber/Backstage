@@ -90,11 +90,38 @@ container) for locking and durability.
 
 ## CI/CD
 
-`.github/workflows/deploy.yml` builds the backend image, pushes it to GHCR,
-and runs `terraform plan` for visibility on every push/PR to `main`. It does
-**not** run `terraform apply` - because this module uses local state (see
-above), an ephemeral GitHub Actions runner has no record of what's already
-deployed, so an apply from CI isn't safe until this module moves to a
-remote backend. Until then, `terraform apply` stays a manual step you run
-from this directory, typically with `-var="container_image=..."` pointing
-at the SHA tag the workflow just pushed.
+`.github/workflows/deploy.yml`, on every push/PR to `main`:
+
+1. Builds the backend image and pushes it to GHCR, tagged with the short
+   git SHA (plus `:latest` on `main`).
+2. Runs `terraform plan` for visibility - never `terraform apply` (see
+   below for why).
+3. **On push to `main` only**: runs `az containerapp update --image
+   ghcr.io/.../backstage:<sha>` to point the live Container App at that
+   exact image. This is what actually deploys each push - Terraform is not
+   involved in routine deploys at all.
+
+Two things worth understanding about that split:
+
+- **Why `terraform apply` doesn't run in CI**: this module uses local state
+  (see above), so an ephemeral GitHub Actions runner has no record of what
+  infrastructure already exists - an apply from CI would either fail
+  (resources already exist) or drift against real state. `terraform apply`
+  stays a manual step you run from this directory for infra-only changes
+  (CPU/memory, scaling, ingress, etc).
+- **Why routine deploys go through `az containerapp update` instead**:
+  unlike Terraform (which needs state to know what changed), swapping the
+  image is a single idempotent API call that needs no state at all - it's
+  the same fix as a manual `az containerapp update --image ...`, just run
+  automatically on every push to `main`. This is also *why* pushing to
+  `:latest` alone was never enough to trigger a redeploy: Container Apps
+  only creates a new revision when the image *reference* string changes,
+  and `:latest` never changes even though its content does. Tagging with
+  the git SHA and pointing `az containerapp update` at that exact tag is
+  what fixes it for good - no more manual `az containerapp update`
+  workarounds needed after a push.
+
+Because routine deploys now bypass Terraform, `template[0].container[0].image`
+is in `azurerm_container_app.backstage`'s `ignore_changes` (see `main.tf`) -
+otherwise a later infra-only `terraform apply` would silently roll the
+running app back to whatever `var.container_image` defaults to.

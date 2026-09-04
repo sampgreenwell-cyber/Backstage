@@ -120,9 +120,21 @@ resource "azurerm_container_app" "backstage" {
     # readiness/liveness/startup probes server-side. Without ignoring them,
     # every plan wants to delete Azure's own defaults - a real regression
     # (no more health checks), not actual drift to fix.
+    #
+    # `image` is ignored too: .github/workflows/deploy.yml deploys new
+    # builds with `az containerapp update --image <sha-tag>` directly (see
+    # that file for why - Container Apps only creates a new revision when
+    # the image *reference* changes, so a static tag like `:latest` never
+    # triggers a redeploy no matter how often you push to it). Without this
+    # ignore, a later infra-only `terraform apply` (e.g. changing CPU/
+    # memory) would silently roll the running app back to whatever
+    # `var.container_image` defaults to. To deploy a specific image through
+    # Terraform instead (e.g. disaster recovery), remove this ignore
+    # temporarily and apply with `-var=container_image=...`.
     ignore_changes = [
       secret,
       template[0].container[0].env,
+      template[0].container[0].image,
       template[0].container[0].liveness_probe,
       template[0].container[0].readiness_probe,
       template[0].container[0].startup_probe,
