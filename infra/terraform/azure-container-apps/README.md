@@ -42,6 +42,16 @@ forward, wire it in at the same time as everything else currently live
 - Terraform >= 1.9 (you have 1.15.8 installed — fine)
 - `az login` with access to subscription `ad459e83-6ba1-44f5-8be3-f4a8fa27b4a2`
   (already the case in this environment)
+- The "Storage Blob Data Contributor" role on the `backstagetf` storage
+  account (see State below) - without it, `terraform init`/`plan`/`apply`
+  can't read or lock state. Run this on any new machine you run Terraform
+  from (needs a one-time role assignment from someone who already has
+  Owner/User Access Administrator on it):
+  ```bash
+  az role assignment create --assignee <your-object-id> \
+    --role "Storage Blob Data Contributor" \
+    --scope "/subscriptions/ad459e83-6ba1-44f5-8be3-f4a8fa27b4a2/resourceGroups/funjibly-tfstate-rg/providers/Microsoft.Storage/storageAccounts/backstagetf"
+  ```
 - A GHCR PAT (`backstage3`) with at least `read:packages` scope
 - The image already pushed to `ghcr.io/sampgreenwell-cyber/backstage:<tag>`
 
@@ -83,10 +93,28 @@ terraform apply -var='container_image=ghcr.io/sampgreenwell-cyber/backstage:v1.2
 
 ## State
 
-This module uses local state (`terraform.tfstate` in this directory) since
-it's a single personal deployment. If it ever becomes a shared/team
-deployment, migrate to a remote `azurerm` backend (storage account +
-container) for locking and durability.
+Remote, in a storage account dedicated to Terraform state (`backstagetf`,
+container `tfstate`) in `funjibly-tfstate-rg` - a separate resource group
+from `rg-backstage` on purpose, so state survives even if this module's
+own infrastructure gets destroyed. That storage account:
+
+- Has shared-key access disabled entirely (`allowSharedKeyAccess: false`)
+  - everything is Azure AD auth (`use_azuread_auth = true` in the backend
+  block, see `versions.tf`), no storage key to manage, rotate, or leak.
+- Has blob versioning and 30-day soft-delete enabled, as a backstop against
+  state corruption or an errant delete.
+- Grants **Storage Blob Data Contributor** (read + write + lock) to human
+  operators, and **Storage Blob Data Reader** (read-only, no lock/write) to
+  the CI service principal (`sp-backstage-deploy`) - see CI/CD below for
+  why that split matters.
+
+This is a genuinely separate storage account from the one another repo
+already uses in the same resource group (`funjiblytfstate`) - Terraform's
+azurerm backend addresses state as storage account → container → blob
+key, so reusing the existing account with just a new container/key would
+have worked equally well; a second account was chosen here for harder
+isolation (its own access policy, independent of whatever the other
+project's state storage needs).
 
 ## CI/CD
 
@@ -103,12 +131,16 @@ container) for locking and durability.
 
 Two things worth understanding about that split:
 
-- **Why `terraform apply` doesn't run in CI**: this module uses local state
-  (see above), so an ephemeral GitHub Actions runner has no record of what
-  infrastructure already exists - an apply from CI would either fail
-  (resources already exist) or drift against real state. `terraform apply`
-  stays a manual step you run from this directory for infra-only changes
-  (CPU/memory, scaling, ingress, etc).
+- **Why `terraform apply` doesn't run in CI**: state is remote now, so CI
+  *can* see real state - but `sp-backstage-deploy` only has the read-only
+  **Storage Blob Data Reader** role on the state storage account (see
+  State above), not Contributor. It can `plan` (with `-lock=false`, since
+  Reader can't take the write lock a normal plan acquires) but has no
+  write/lock access to actually apply anything, even if a step were added.
+  That's an enforced RBAC boundary now, not just an omitted workflow step -
+  upgrading that role is a prerequisite before CI could ever apply.
+  `terraform apply` stays a manual step you run from this directory for
+  infra-only changes (CPU/memory, scaling, ingress, etc).
 - **Why routine deploys go through `az containerapp update` instead**:
   unlike Terraform (which needs state to know what changed), swapping the
   image is a single idempotent API call that needs no state at all - it's

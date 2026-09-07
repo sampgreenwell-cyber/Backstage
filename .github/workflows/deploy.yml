@@ -5,15 +5,18 @@ name: Build and Deploy Backstage
 # exact image via `az containerapp update --image`. Also runs
 # `terraform plan` for visibility on every push/PR.
 #
-# Deliberately does NOT run terraform apply. The module uses local state (a
-# .tfstate file on the operator's machine, gitignored) rather than a shared
-# remote backend, so an ephemeral GitHub Actions runner has no way to know
-# what infrastructure already exists - an apply from CI would either fail
-# (resources already exist) or drift against real state. That's why day-2
-# image deploys go through `az containerapp update` above instead of
-# Terraform: it needs no state at all, just talks to the live resource -
-# see the `deploy` job below. Infra-only changes (CPU/memory, ingress,
-# scaling, etc.) still go through a manual `terraform apply`:
+# Deliberately does NOT run terraform apply. State is remote (an azurerm
+# backend - see versions.tf) so CI *can* see real state, but the
+# sp-backstage-deploy service principal this workflow authenticates as only
+# has the "Storage Blob Data Reader" role on that storage account, not
+# Contributor - it can read state to plan, but has no write/lock access, so
+# apply would fail even if someone added the step. That's a deliberate,
+# enforced boundary, not just an omitted step - if this project ever wants
+# CI to apply, that role needs upgrading first. Day-2 image deploys don't
+# need any of this: they go through `az containerapp update` instead of
+# Terraform (see the `deploy` job below), since swapping an image
+# reference needs no state at all. Infra-only changes (CPU/memory,
+# ingress, scaling, etc.) still go through a manual `terraform apply`:
 #
 #   cd infra/terraform/azure-container-apps
 #   terraform apply
@@ -156,17 +159,17 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform validate
 
-      # Because state is local (see note at top of file), this runner starts
-      # with an empty state every time - the plan below will always show
-      # "will create" for all resources, not a real diff against what's
-      # deployed. It's here for early syntax/logic feedback on PRs, not as
-      # an accurate change preview.
+      # -lock=false because sp-backstage-deploy only has Storage Blob Data
+      # Reader on the state storage account (see note at top of file) - it
+      # cannot take the write lock a normal plan acquires, but a read-only
+      # plan doesn't need one.
       - name: Terraform plan
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform plan -input=false
+        run: terraform plan -input=false -lock=false
 
-      # No apply step - see note at the top of this file: local state means
-      # applying from CI isn't safe until this module has a remote backend.
+      # No apply step - see note at the top of this file: this service
+      # principal's RBAC role on the state storage is read-only, so apply
+      # would fail regardless.
 
   deploy:
     name: Deploy image to Azure Container Apps
