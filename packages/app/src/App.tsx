@@ -3,7 +3,14 @@ import catalogPlugin from '@backstage/plugin-catalog/alpha';
 import githubActionsPlugin from '@backstage-community/plugin-github-actions/alpha';
 import { navModule } from './modules/nav';
 import { homeModule } from './modules/home';
+import { authModule } from './modules/auth';
 
 export default createApp({
-  features: [catalogPlugin, githubActionsPlugin, navModule, homeModule],
+  features: [
+    catalogPlugin,
+    githubActionsPlugin,
+    navModule,
+    homeModule,
+    authModule,
+  ],
 });
