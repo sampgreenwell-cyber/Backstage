@@ -38,8 +38,12 @@ backend:
 auth:
   environment: production
   providers:
-    guest:
-      dangerouslyAllowOutsideDevelopment: true
+    # Guest is intentionally NOT configured here (it's fine in
+    # app-config.yaml for local dev). Backstage's guest provider already
+    # refuses to authenticate whenever NODE_ENV isn't "development" unless
+    # `dangerouslyAllowOutsideDevelopment: true` is set somewhere in the
+    # merged config - so never set that flag here, in this or any other
+    # production config file.
     github:
       production:
         clientId: ${AUTH_GITHUB_CLIENT_ID}
