@@ -3,10 +3,12 @@ kind: Component
 metadata:
   name: backstage
   description: An example of a Backstage application.
-  # Example for optional annotations
-  # annotations:
-  #   github.com/project-slug: backstage/backstage
-  #   backstage.io/techdocs-ref: dir:.
+  annotations:
+    # Required by @backstage-community/plugin-github-actions - without it
+    # the CI/CD tab renders but shows no data. Any other catalog component
+    # (including ones scaffolded via examples/express-template) needs the
+    # same annotation to get a working CI/CD tab.
+    github.com/project-slug: sampgreenwell-cyber/Backstage
 spec:
   type: website
   owner: john@example.com
