@@ -81,3 +81,8 @@ catalog:
       target: /app/examples/express-template/template.yaml
       rules:
         - allow: [Template]
+    
+    - type: file
+      target: /app/examples/dotnet-template/template.yaml
+      rules:
+        - allow: [Template]
