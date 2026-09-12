@@ -40,6 +40,8 @@ spec:
       action: fetch:template
       input:
         url: ./skeleton
+        copyWithoutRender:
+          - .github/workflows/ci-cd.yaml
         values:
           name: ${{ parameters.name }}
           description: ${{ parameters.description }}
