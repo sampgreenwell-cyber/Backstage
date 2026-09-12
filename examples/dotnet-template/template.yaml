@@ -45,6 +45,7 @@ spec:
           description: ${{ parameters.description }}
           port: ${{ parameters.port }}
           owner: ${{ parameters.owner }}
+          repoUrl: ${{ parameters.repoUrl }}
     - id: publish
       name: Publish
       action: publish:github
