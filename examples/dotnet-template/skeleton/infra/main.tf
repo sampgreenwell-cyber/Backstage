@@ -6,47 +6,17 @@ terraform {
     }
   }
   backend "azurerm" {
-    # Values passed via -backend-config in CI: resource_group_name,
-    # storage_account_name, container_name, key (per-service state file)
+    use_azuread_auth = true
   }
 }
 
-provider "azurerm" {
-  features {}
-}
-
-resource "azurerm_container_app" "this" {
-  name                         = var.service_name
-  container_app_environment_id = var.container_apps_environment_id
-  resource_group_name          = var.resource_group_name
-  revision_mode                = "Single"
-
-  secret {
-    name  = "ghcr-pat"
-    value = var.ghcr_pat
-  }
-
-  registry {
-    server               = "ghcr.io"
-    username              = var.ghcr_username
-    password_secret_name  = "ghcr-pat"
-  }
-
-  template {
-    container {
-      name   = var.service_name
-      image  = var.image
-      cpu    = 0.25
-      memory = "0.5Gi"
-    }
-  }
-
-  ingress {
-    external_enabled = true
-    target_port      = var.container_port
-    traffic_weight {
-      percentage      = 100
-      latest_revision = true
-    }
-  }
+module "service" {
+  source                        = "git::https://github.com/sampgreenwell-cyber/terraform-modules.git//container-app-service?ref=v1.0.0"
+  service_name                  = var.service_name
+  image                         = var.image
+  container_apps_environment_id = var.container_apps_environment_id
+  resource_group_name           = var.resource_group_name
+  ghcr_pat                      = var.ghcr_pat
+  ghcr_username                 = var.ghcr_username
+  container_port                = var.container_port
 }
