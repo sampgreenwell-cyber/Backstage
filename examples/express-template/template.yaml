@@ -24,7 +24,7 @@ spec:
           title: Port
           type: string
           description: Port the service listens on
-          default: "3000"
+          default: "8080"
         owner:
           title: Owner
           type: string
@@ -52,6 +52,7 @@ spec:
           description: ${{ parameters.description }}
           port: ${{ parameters.port }}
           owner: ${{ parameters.owner }}
+          repoUrl: ${{ parameters.repoUrl }}
 
     - id: publish
       name: Publish
