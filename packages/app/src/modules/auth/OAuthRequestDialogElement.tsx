@@ -8,6 +8,7 @@ import { OAuthRequestDialog } from '@backstage/core-components';
 // no UI - the popup only ever opens from a click on this dialog, since
 // browsers block popups that aren't opened directly from a user gesture.
 export const oAuthRequestDialogElement = AppRootElementBlueprint.make({
+  name: 'oauth-request-dialog',
   params: {
     element: <OAuthRequestDialog />,
   },
