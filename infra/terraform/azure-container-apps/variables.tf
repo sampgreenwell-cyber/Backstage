@@ -60,7 +60,7 @@ variable "min_replicas" {
 variable "max_replicas" {
   description = "Maximum number of replicas Container Apps may scale out to."
   type        = number
-  default     = 3
+  default     = 1
 }
 
 variable "ghcr_username" {
