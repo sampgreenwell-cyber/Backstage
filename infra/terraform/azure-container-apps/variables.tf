@@ -80,6 +80,30 @@ variable "ghcr_pat" {
   }
 }
 
+variable "postgres_location" {
+  description = "Azure region for the Postgres Flexible Server. Separate from var.location because Flexible Server provisioning is restricted in eastus for this subscription."
+  type        = string
+  default     = "eastus2"
+}
+
+variable "postgres_sku_name" {
+  description = "Flexible Server SKU. B_Standard_B1ms (Burstable, 1 vCore, 2 GiB) is the cheapest tier - note its low max_connections (~50)."
+  type        = string
+  default     = "B_Standard_B1ms"
+}
+
+variable "postgres_version" {
+  description = "PostgreSQL major version for the Flexible Server."
+  type        = string
+  default     = "16"
+}
+
+variable "postgres_storage_mb" {
+  description = "Flexible Server storage in MB. 32768 (32 GB) is the minimum; auto-grow is off, so raise this to add space."
+  type        = number
+  default     = 32768
+}
+
 variable "tags" {
   description = "Tags applied to every resource this module creates."
   type        = map(string)

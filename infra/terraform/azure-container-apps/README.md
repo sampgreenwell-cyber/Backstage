@@ -10,6 +10,11 @@ Container Apps Environment + Container App.
 - Container Apps managed Environment
 - Container App with external HTTPS ingress on the backend's port (7007),
   pulling the private image from `ghcr.io` using a GHCR PAT
+- Azure Database for PostgreSQL Flexible Server (the production database):
+  Burstable `B_Standard_B1ms`, PostgreSQL 16, 32 GB storage (auto-grow
+  off), 7-day backups, no HA or geo-redundant backup, plus an
+  `AllowAzureServices` firewall rule and a generated admin password. See
+  [Database](#database) below.
 
 ## What this deliberately does NOT manage
 
@@ -82,7 +87,8 @@ terraform apply -var='container_image=ghcr.io/sampgreenwell-cyber/backstage:v1.2
    by Terraform from the Container App's own FQDN) - no manual step needed
    for that.
 2. In the Azure Portal, open the Container App → **Secrets**, add:
-   - `database-url` - your Postgres connection string
+   - `database-url` - the Postgres connection string, built from the
+     Terraform outputs as shown in [Setting DATABASE_URL](#setting-database_url)
    - `backend-auth-secret` - the value from
      `terraform output -raw backend_auth_secret`
 3. Under **Containers → Environment variables**, add (each referencing the
@@ -90,6 +96,87 @@ terraform apply -var='container_image=ghcr.io/sampgreenwell-cyber/backstage:v1.2
    - `DATABASE_URL`
    - `BACKEND_AUTH_SECRET`
 4. Save - this creates a new revision and restarts the app.
+
+## Database
+
+The production database is the Flexible Server above, replacing the
+previous free-tier Neon instance (which suspends its compute once the
+monthly allowance runs out).
+
+- **Region**: `eastus2` (`var.postgres_location`), not `eastus` like the
+  rest of the module. Azure returns "Provisioning is restricted in this
+  region" for Flexible Server in `eastus` on this subscription. Both are
+  in Virginia, so app-to-database latency is a few ms.
+- **Cost**: about $16/month in eastus2 (checked 2026-09 via the Azure
+  retail prices API): B1ms compute $0.017/hr ≈ $12.41, plus 32 GB ×
+  $0.115/GB ≈ $3.68. Backup storage is free up to the provisioned storage
+  size.
+- **Connection limit**: B1ms allows only ~50 connections, and Backstage
+  opens a knex pool per plugin database. If the logs show `too many
+  connections` or `remaining connection slots are reserved`, cap
+  `backend.database.knexConfig.pool.max` in `app-config.production.yaml`.
+- **Network**: public endpoint, TLS enforced (server default), and the
+  `AllowAzureServices` (0.0.0.0) rule so the Container App - which has no
+  static outbound IP - can connect. That rule admits any Azure-hosted
+  source, so the generated password and TLS are the real protection.
+
+### Setting DATABASE_URL
+
+Terraform does not set it (see "What this deliberately does NOT manage").
+Build it from the outputs:
+
+```bash
+FQDN=$(terraform output -raw postgres_server_fqdn)
+USER=$(terraform output -raw postgres_admin_login)
+PASS=$(terraform output -raw postgres_admin_password)
+DATABASE_URL="postgresql://$USER:$PASS@$FQDN:5432/postgres?sslmode=verify-full"
+```
+
+`/postgres` is only the bootstrap database: Backstage creates and uses its
+own `backstage_plugin_*` databases on first start, so a fresh server needs
+no manual schema setup. The password is alphanumeric, so no URL-encoding
+is needed.
+
+Then store it as the `database-url` secret and point the `DATABASE_URL` env
+var at it. `--set-env-vars` only touches that one variable, and changing
+the template creates a new revision, so no separate restart is needed:
+
+```bash
+az containerapp secret set -n backstage -g rg-backstage \
+  --secrets database-url="$DATABASE_URL"
+az containerapp update -n backstage -g rg-backstage \
+  --set-env-vars DATABASE_URL=secretref:database-url
+```
+
+Once `DATABASE_URL` already references the secret, rotating it later only
+needs the `secret set` plus a restart of the active revision, because a
+secret change on its own doesn't create a revision:
+
+```bash
+az containerapp revision restart -n backstage -g rg-backstage \
+  --revision $(az containerapp revision list -n backstage -g rg-backstage \
+    --query "[?properties.active].name | [0]" -o tsv)
+```
+
+(Before this change, `DATABASE_URL` held the old Neon URL as a plain env
+var value rather than a secret reference.)
+
+### Temporary workstation access
+
+For `psql` from your machine, add a rule for your IP **with the CLI, not
+Terraform** (so it never lands in state), and delete it when you're done:
+
+```bash
+PG=$(terraform output -raw postgres_server_fqdn | cut -d. -f1)
+MYIP=$(curl -s https://api.ipify.org)
+az postgres flexible-server firewall-rule create -g rg-backstage -n "$PG" \
+  --rule-name tmp-operator-verify --start-ip-address "$MYIP" --end-ip-address "$MYIP"
+
+psql "$DATABASE_URL" -c "select version();"
+
+az postgres flexible-server firewall-rule delete -g rg-backstage -n "$PG" \
+  --rule-name tmp-operator-verify --yes
+```
 
 ## State
 

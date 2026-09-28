@@ -49,6 +49,82 @@ resource "random_password" "backend_auth_secret" {
   special = false
 }
 
+# Admin password for the Postgres Flexible Server below. Same pattern as
+# backend_auth_secret: generated here, exposed as a sensitive output, and
+# pasted by hand into the Container App's DATABASE_URL secret (never wired
+# in by Terraform - see that resource's lifecycle block). Alphanumeric only
+# so it can go straight into a postgresql:// URL without percent-encoding.
+resource "random_password" "postgres_admin" {
+  length  = 32
+  special = false
+}
+
+# Flexible Server names are globally unique DNS labels
+# (<name>.postgres.database.azure.com), so a bare "psql-backstage" could
+# already be taken by someone else's server.
+resource "random_string" "postgres_suffix" {
+  length  = 6
+  special = false
+  upper   = false
+}
+
+# Production database (DATABASE_URL). Cheapest workable tier: Burstable
+# B1ms, 32 GB (the minimum) with auto-grow off, 7-day backups, no HA, no
+# geo-redundant backup. Backstage connects as the admin login and creates
+# its own per-plugin databases (backstage_plugin_*) on startup, so no
+# databases or roles are managed here.
+#
+# Lives in var.postgres_location rather than the resource group's region:
+# Azure returns "Provisioning is restricted in this region" for Flexible
+# Server in eastus on this subscription, so it's in eastus2 while the
+# Container App stays in eastus.
+resource "azurerm_postgresql_flexible_server" "backstage" {
+  name                = "psql-${var.app_name}-${random_string.postgres_suffix.result}"
+  resource_group_name = azurerm_resource_group.backstage.name
+  location            = var.postgres_location
+  version             = var.postgres_version
+  sku_name            = var.postgres_sku_name
+  storage_mb          = var.postgres_storage_mb
+
+  auto_grow_enabled             = false
+  backup_retention_days         = 7
+  geo_redundant_backup_enabled  = false
+  public_network_access_enabled = true
+
+  administrator_login    = "backstageadmin"
+  administrator_password = random_password.postgres_admin.result
+
+  authentication {
+    password_auth_enabled         = true
+    active_directory_auth_enabled = false
+  }
+
+  tags = var.tags
+
+  lifecycle {
+    # Azure picks an availability zone when none is given; without this,
+    # every later plan shows drift on it.
+    ignore_changes = [zone]
+  }
+}
+
+# 0.0.0.0-0.0.0.0 is Azure's convention for "allow Azure services". The
+# Container Apps environment has no guaranteed static outbound IP, and
+# private networking is deliberately out of scope (cost), so this is how
+# the app reaches the server. Trade-off: it admits connections from any
+# Azure-hosted source, not just this subscription - TLS (enforced by
+# default) and the 32-char generated password are the actual protection.
+#
+# Temporary workstation access for debugging goes through
+# `az postgres flexible-server firewall-rule create/delete`, never here, so
+# it doesn't end up in state (see README).
+resource "azurerm_postgresql_flexible_server_firewall_rule" "allow_azure_services" {
+  name             = "AllowAzureServices"
+  server_id        = azurerm_postgresql_flexible_server.backstage.id
+  start_ip_address = "0.0.0.0"
+  end_ip_address   = "0.0.0.0"
+}
+
 resource "azurerm_container_app" "backstage" {
   name                         = var.app_name
   resource_group_name          = azurerm_resource_group.backstage.name
