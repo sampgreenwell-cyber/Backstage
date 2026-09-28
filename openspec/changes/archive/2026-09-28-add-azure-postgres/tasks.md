@@ -48,4 +48,4 @@
 
 ## 7. CI
 
-- [ ] 7.1 After the changes are committed and pushed to `main` (user's call), confirm the `Terraform plan` job in `deploy.yml` is green; if refresh fails on the Postgres resources, report it as the SP-role open question and stop
+- [x] 7.1 After the changes are committed and pushed to `main` (user's call), confirm the `Terraform plan` job in `deploy.yml` is green; if refresh fails on the Postgres resources, report it as the SP-role open question and stop — **Result: run 36472553273 all green; plan refreshed the Postgres resources with no infrastructure changes (outputs-only: latest_revision_fqdn)**
