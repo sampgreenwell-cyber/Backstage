@@ -57,6 +57,10 @@ auth:
             - resolver: usernameMatchingUserEntityName
 
 catalog:
+  # Templates are Location targets in another repo, so Template must be allowed globally
+  # (location-level rules don't reach entities behind a nested Location).
+  rules:
+    - allow: [Component, System, API, Resource, Location, Template]
   # Overrides the default list locations from app-config.yaml as these contain example data.
   # See https://backstage.io/docs/features/software-catalog/#adding-components-to-the-catalog for more details
   # on how to get entities into the catalog.
@@ -65,24 +69,13 @@ catalog:
     - type: file
       target: /app/examples/entities.yaml
 
-    # Local example template
-    - type: file
-      target: /app/examples/template/template.yaml
-      rules:
-        - allow: [Template]
-
     # Local example organizational data
     - type: file
       target: /app/examples/org.yaml
       rules:
         - allow: [User, Group]
 
-    - type: file
-      target: /app/examples/express-template/template.yaml
-      rules:
-        - allow: [Template]
-    
-    - type: file
-      target: /app/examples/dotnet-template/template.yaml
-      rules:
-        - allow: [Template]
+    # Software templates: every template listed in all-templates.yaml. Changes there need no
+    # redeploy; Backstage refreshes the location on its normal catalog schedule.
+    - type: url
+      target: https://github.com/sampgreenwell-cyber/Backstage-Templates/blob/main/all-templates.yaml
