@@ -189,17 +189,11 @@ catalog:
     entityFilename: catalog-info.yaml
     pullRequestBranchName: backstage-integration
   rules:
-    - allow: [Component, System, API, Resource, Location]
+    - allow: [Component, System, API, Resource, Location, Template]
   locations:
     # Local example data, file locations are relative to the backend process, typically `packages/backend`
     - type: file
       target: ../../examples/entities.yaml
-
-    # Local example template
-    - type: file
-      target: ../../examples/template/template.yaml
-      rules:
-        - allow: [Template]
 
     # Local example organizational data
     - type: file
@@ -207,10 +201,9 @@ catalog:
       rules:
         - allow: [User, Group]
 
-    - type: file
-      target: ../../examples/express-template/template.yaml
-      rules:
-        - allow: [Template]
+    # Software templates live in their own repo (needs GITHUB_TOKEN with access to it).
+    - type: url
+      target: https://github.com/sampgreenwell-cyber/Backstage-Templates/blob/main/all-templates.yaml
     ## Uncomment these lines to add more example data
     # - type: url
     #   target: https://github.com/backstage/backstage/blob/master/packages/catalog-model/examples/all.yaml
