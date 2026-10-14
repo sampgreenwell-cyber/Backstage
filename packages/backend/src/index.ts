@@ -19,6 +19,8 @@ backend.add(import('@backstage/plugin-scaffolder-backend-module-github'));
 backend.add(
   import('@backstage/plugin-scaffolder-backend-module-notifications'),
 );
+// vwstate:check-product and vwstate:apply-appends, for the Gemini Uprise service template
+backend.add(import('./modules/vwstateAppends'));
 
 // techdocs plugin
 backend.add(import('@backstage/plugin-techdocs-backend'));
