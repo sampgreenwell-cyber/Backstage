@@ -1,4 +1,4 @@
-import { AppendError, applyAppend } from './applyAppends';
+import { AppendError, applyAppend, projectGuid } from './applyAppends';
 
 // Same cases as gmnupr-service/vwstate/test_apply_appends.py.
 const ENV_KUSTOMIZATION =
@@ -35,6 +35,24 @@ const OVERLAY_KUSTOMIZATION =
 const CONFIG_ENTRY =
   '- name: events-config\n  behavior: merge\n  files:\n  - appsettings.override.json=events-config.override.json';
 const BLOCK = { file: 'k.yaml', mode: 'list-block-end' as const, list: 'configMapGenerator', text: CONFIG_ENTRY };
+// A product solution with one project, CRLF and tabs as Visual Studio writes it.
+const SLN =
+  'Microsoft Visual Studio Solution File, Format Version 12.00\r\n' +
+  'Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Gemini.DemoA.Intake.WebApi", ' +
+  '"Gemini.DemoA.Intake.WebApi\\Gemini.DemoA.Intake.WebApi.csproj", "{6F1C2A57-3D0B-4E7A-9B1F-2C5D8E4A7B10}"\r\n' +
+  'EndProject\r\nGlobal\r\n\tGlobalSection(SolutionConfigurationPlatforms) = preSolution\r\n' +
+  '\t\tDebug|Any CPU = Debug|Any CPU\r\n\t\tRelease|Any CPU = Release|Any CPU\r\n\tEndGlobalSection\r\n' +
+  '\tGlobalSection(ProjectConfigurationPlatforms) = postSolution\r\n' +
+  '\t\t{6F1C2A57-3D0B-4E7A-9B1F-2C5D8E4A7B10}.Debug|Any CPU.ActiveCfg = Debug|Any CPU\r\n' +
+  '\tEndGlobalSection\r\nEndGlobal\r\n';
+const SLN_PROJECT = {
+  file: 'src/Gemini.DemoA.sln',
+  mode: 'sln-project' as const,
+  name: 'Gemini.DemoA.Consumer.Events',
+  path: 'Gemini.DemoA.Consumer.Events\\Gemini.DemoA.Consumer.Events.csproj',
+};
+// Same value as test_apply_appends.py: both implementations must agree.
+const EVENTS_GUID = '{276243DB-C4F3-5384-BD23-83733D76A33F}';
 
 /** Existing lines, in order, must all survive unchanged. */
 function expectOnlyAdded(before: string, after: string) {
@@ -114,6 +132,36 @@ describe('applyAppend', () => {
     const { text } = applyAppend(before, BLOCK);
     expect(text).toContain(`  behavior: merge\n${CONFIG_ENTRY}\n# resources follow\n`);
     expectOnlyAdded(before, text);
+  });
+
+  it('adds a project block and its configuration lines to a .sln', () => {
+    expect(projectGuid(SLN_PROJECT.path)).toBe(EVENTS_GUID);
+    const { text } = applyAppend(SLN, SLN_PROJECT);
+    expect(text).toContain(
+      'Gemini.DemoA.Intake.WebApi.csproj", "{6F1C2A57-3D0B-4E7A-9B1F-2C5D8E4A7B10}"\r\nEndProject\r\n' +
+        'Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Gemini.DemoA.Consumer.Events", ' +
+        `"Gemini.DemoA.Consumer.Events\\Gemini.DemoA.Consumer.Events.csproj", "${EVENTS_GUID}"\r\nEndProject\r\nGlobal\r\n`,
+    );
+    expect(text).toContain(
+      `Debug|Any CPU\r\n\t\t${EVENTS_GUID}.Debug|Any CPU.ActiveCfg = Debug|Any CPU\r\n` +
+        `\t\t${EVENTS_GUID}.Debug|Any CPU.Build.0 = Debug|Any CPU\r\n` +
+        `\t\t${EVENTS_GUID}.Release|Any CPU.ActiveCfg = Release|Any CPU\r\n` +
+        `\t\t${EVENTS_GUID}.Release|Any CPU.Build.0 = Release|Any CPU\r\n` +
+        '\tEndGlobalSection\r\nEndGlobal\r\n',
+    );
+    expect(text.replace(/\r\n/g, '')).not.toContain('\n');
+    expectOnlyAdded(SLN, text);
+  });
+
+  it('is a no-op the second time for a .sln project', () => {
+    const once = applyAppend(SLN, SLN_PROJECT).text;
+    expect(applyAppend(once, SLN_PROJECT)).toEqual({ text: once, result: 'already present' });
+  });
+
+  it('fails on a .sln without a configuration section', () => {
+    expect(() =>
+      applyAppend('Project("{X}") = "a", "a.csproj", "{Y}"\nEndProject\nGlobal\nEndGlobal\n', SLN_PROJECT),
+    ).toThrow(AppendError);
   });
 
   it('is a no-op the second time for a block entry', () => {
