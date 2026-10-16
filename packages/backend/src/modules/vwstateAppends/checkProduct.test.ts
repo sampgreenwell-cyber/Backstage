@@ -1,4 +1,11 @@
-import { findExistingProductProblems, findProductConflicts, isProductFile, isWorkloadFile } from './checkProduct';
+import {
+  findExistingProductProblems,
+  findMissingOverlays,
+  findPendingOtherEnvsPull,
+  findProductConflicts,
+  isProductFile,
+  isWorkloadFile,
+} from './checkProduct';
 
 const FILES = [
   { path: 'base/Gemini/Insurance/kustomization.yaml', content: 'namespace: gemini-insurance\n' },
@@ -78,5 +85,70 @@ describe('findExistingProductProblems', () => {
     expect(findExistingProductProblems('demo-a', 'events', 'x', PRODUCT, null)).toEqual([
       expect.stringContaining('cannot be read'),
     ]);
+  });
+});
+
+describe('findMissingOverlays', () => {
+  const OVERLAYS = [
+    { path: 'overlays/gmnupr/dev1/demo-a/kustomization.yaml', content: '' },
+    { path: 'overlays/gmnupr/dev2/Demo-A/kustomization.yaml', content: '' },
+    { path: 'overlays/gmnupr/dev3/insurance/kustomization.yaml', content: '' },
+  ];
+
+  it('lists the environments without the product overlay, case-insensitively', () => {
+    expect(findMissingOverlays('demo-a', ['dev2', 'dev3', 'pp1'], OVERLAYS)).toEqual(['dev3', 'pp1']);
+  });
+
+  it('passes when every environment has the overlay', () => {
+    expect(findMissingOverlays('demo-a', ['dev1', 'dev2'], OVERLAYS)).toEqual([]);
+  });
+});
+
+describe('findPendingOtherEnvsPull', () => {
+  const REPO = 'owner/vwstate-lab';
+  const pr = (head: string, base: string, sha = `${head}-sha`, repoFullName = REPO) => ({
+    head: { ref: head, sha, repoFullName },
+    base: { ref: base },
+  });
+
+  it('returns null when the product has no open other-environments PR', () => {
+    expect(findPendingOtherEnvsPull('demo-a', REPO, [pr('onboard/demo-a-status', 'master')])).toBeNull();
+  });
+
+  it("finds the product's first PR 2, still stacked on its PR 1 branch", () => {
+    expect(
+      findPendingOtherEnvsPull('demo-a', REPO, [
+        pr('onboard/demo-a-status-other-envs', 'onboard/demo-a-status'),
+        pr('onboard/demo-b-orders-other-envs', 'master'),
+      ]),
+    ).toEqual({ branch: 'onboard/demo-a-status-other-envs', sha: 'onboard/demo-a-status-other-envs-sha' });
+  });
+
+  it('returns the tip of a chain of PR 2s', () => {
+    expect(
+      findPendingOtherEnvsPull('demo-a', REPO, [
+        pr('onboard/demo-a-status-other-envs', 'master'),
+        pr('onboard/demo-a-events-other-envs', 'onboard/demo-a-status-other-envs'),
+        pr('onboard/demo-a-nightly-other-envs', 'onboard/demo-a-events-other-envs'),
+      ])?.branch,
+    ).toBe('onboard/demo-a-nightly-other-envs');
+  });
+
+  it('does not match a product that only shares a prefix, or a fork branch', () => {
+    expect(
+      findPendingOtherEnvsPull('demo', REPO, [
+        pr('onboard/demox-status-other-envs', 'master'),
+        pr('onboard/demo-a-other-envs', 'master', 'x', 'someone/vwstate-lab'),
+      ]),
+    ).toBeNull();
+  });
+
+  it('fails when the PR 2s are not one chain', () => {
+    expect(() =>
+      findPendingOtherEnvsPull('demo-a', REPO, [
+        pr('onboard/demo-a-status-other-envs', 'master'),
+        pr('onboard/demo-a-events-other-envs', 'master'),
+      ]),
+    ).toThrow(/not one chain/);
   });
 });
