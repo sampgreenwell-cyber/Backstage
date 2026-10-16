@@ -53,6 +53,13 @@ const SLN_PROJECT = {
 };
 // Same value as test_apply_appends.py: both implementations must agree.
 const EVENTS_GUID = '{276243DB-C4F3-5384-BD23-83733D76A33F}';
+// The product repo's container list: one "<project path> <image name>" line per workload.
+const CONTAINER = {
+  file: 'containers.txt',
+  mode: 'after-last' as const,
+  marker: 'src/',
+  text: 'src/Gemini.DemoA.Consumer.Events gemini-demo-a-consumer-events',
+};
 
 /** Existing lines, in order, must all survive unchanged. */
 function expectOnlyAdded(before: string, after: string) {
@@ -162,6 +169,17 @@ describe('applyAppend', () => {
     expect(() =>
       applyAppend('Project("{X}") = "a", "a.csproj", "{Y}"\nEndProject\nGlobal\nEndGlobal\n', SLN_PROJECT),
     ).toThrow(AppendError);
+  });
+
+  it('adds a container line after the last one', () => {
+    const before = 'src/Gemini.DemoA.Intake.WebApi gemini-demo-a-intake-webapi\n';
+    expect(applyAppend(before, CONTAINER).text).toBe(`${before}${CONTAINER.text}\n`);
+  });
+
+  it('refuses a container list without a final newline', () => {
+    expect(() => applyAppend('src/Gemini.DemoA.Intake.WebApi gemini-demo-a-intake-webapi', CONTAINER)).toThrow(
+      AppendError,
+    );
   });
 
   it('is a no-op the second time for a block entry', () => {
