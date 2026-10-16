@@ -4,7 +4,12 @@
  * rules, same tests); keep the two in step.
  *
  * Modes:
- *   list-end    insert after the last item of a top-level list (`list`, e.g. resources:)
+ *   list-end    insert after the last item of a top-level list (`list`, e.g. resources:);
+ *               for one-line items only
+ *   list-block-end
+ *               insert after the whole last item of a top-level list whose items span
+ *               several lines (e.g. configMapGenerator:), keeping the list's blank-line
+ *               separator
  *   after-last  insert after the last line that starts with `marker`
  *   list-item   add a YAML list item to a file that is one list. Appended at the end
  *               when the file ends with a newline; when it does not, inserted at the
@@ -16,6 +21,7 @@
 
 export type AppendSpec =
   | { file: string; mode: 'list-end'; list: string; text: string }
+  | { file: string; mode: 'list-block-end'; list: string; text: string }
   | { file: string; mode: 'after-last'; marker: string; text: string }
   | { file: string; mode: 'list-item'; text: string };
 
@@ -54,6 +60,24 @@ export function applyAppend(text: string, spec: AppendSpec): { text: string; res
       if (lines[i].startsWith('- ')) last = i;
       else if (lines[i].trim() && !lines[i].startsWith(' ') && !lines[i].startsWith('#')) break;
     }
+    at = last + 1;
+  } else if (spec.mode === 'list-block-end') {
+    const header = `${spec.list}:`;
+    const start = lines.findIndex(l => l.trimEnd() === header);
+    if (start < 0) throw new AppendError(`no top-level '${header}'`);
+    // The list runs until the next top-level key; its last line is the last non-blank
+    // item or indented line before that (top-level comments are not part of it).
+    let last = -1;
+    let separated = false;
+    for (let i = start + 1; i < lines.length; i++) {
+      const l = lines[i];
+      if (l.startsWith('- ') || (l.startsWith(' ') && l.trim())) {
+        if (last >= 0 && lines[i - 1].trim() === '' && l.startsWith('- ')) separated = true;
+        last = i;
+      } else if (l.trim() && !l.startsWith('#')) break;
+    }
+    if (last < 0) throw new AppendError(`'${header}' has no items`);
+    if (separated) added = ['', ...added];
     at = last + 1;
   } else if (spec.mode === 'after-last') {
     let last = -1;

@@ -19,6 +19,22 @@ const INCLUDE = {
   text: '#@cmd/append file=../../routes/claimsx.yaml',
 };
 const RESOURCES = { file: 'k.yaml', mode: 'list-end' as const, list: 'resources', text: '- claimsx/' };
+// Multi-line configMapGenerator entries, as in a product base (LF) and an env overlay (CRLF).
+const BASE_KUSTOMIZATION =
+  'namespace: gemini-demo\n\nconfigMapGenerator:\n- name: intake-webapi-config\n' +
+  '  files:\n  - appsettings.json=intake-webapi-config.appsettings.json\n  options:\n' +
+  '    disableNameSuffixHash: true\n\n- name: intake-webapi-startup-config\n' +
+  '  behavior: create\n  options:\n    disableNameSuffixHash: true\n\n' +
+  'resources:\n- 01_namespace.yaml\n';
+const OVERLAY_KUSTOMIZATION =
+  'configMapGenerator:\r\n- name: admin-webapi-config\r\n  behavior: merge\r\n' +
+  '  files:\r\n  - appsettings.override.json=admin-webapi-config.override.json \r\n\r\n' +
+  '- name: admin-webapi-startup-config\r\n  behavior: merge\r\n  literals:\r\n' +
+  '  - HostStartup__DisableAzureAppConfiguration=false\r\n\r\n' +
+  'resources:\r\n- ../../../base/Gemini/demo\r\n';
+const CONFIG_ENTRY =
+  '- name: events-config\n  behavior: merge\n  files:\n  - appsettings.override.json=events-config.override.json';
+const BLOCK = { file: 'k.yaml', mode: 'list-block-end' as const, list: 'configMapGenerator', text: CONFIG_ENTRY };
 
 /** Existing lines, in order, must all survive unchanged. */
 function expectOnlyAdded(before: string, after: string) {
@@ -71,5 +87,37 @@ describe('applyAppend', () => {
 
   it('fails when the anchor is missing', () => {
     expect(() => applyAppend('kind: Kustomization\n', RESOURCES)).toThrow(AppendError);
+  });
+
+  it('adds a block entry after the whole last entry (LF)', () => {
+    const { text } = applyAppend(BASE_KUSTOMIZATION, BLOCK);
+    expect(text).toContain(`    disableNameSuffixHash: true\n\n${CONFIG_ENTRY}\n\nresources:`);
+    expect(text).toContain('- name: intake-webapi-startup-config\n  behavior: create\n');
+    expectOnlyAdded(BASE_KUSTOMIZATION, text);
+  });
+
+  it('adds a block entry and keeps CRLF', () => {
+    const { text } = applyAppend(OVERLAY_KUSTOMIZATION, BLOCK);
+    const entry = CONFIG_ENTRY.replace(/\n/g, '\r\n');
+    expect(text).toContain(`DisableAzureAppConfiguration=false\r\n\r\n${entry}\r\n\r\nresources:`);
+    expect(text.replace(/\r\n/g, '')).not.toContain('\n');
+    expectOnlyAdded(OVERLAY_KUSTOMIZATION, text);
+  });
+
+  it('adds a block entry to a list at the end of the file', () => {
+    const before = 'configMapGenerator:\n- name: a\n  behavior: merge\n';
+    expect(applyAppend(before, BLOCK).text).toBe(`${before}${CONFIG_ENTRY}\n`);
+  });
+
+  it('adds a block entry before a top-level comment', () => {
+    const before = 'configMapGenerator:\n- name: a\n  behavior: merge\n# resources follow\nresources:\n- x\n';
+    const { text } = applyAppend(before, BLOCK);
+    expect(text).toContain(`  behavior: merge\n${CONFIG_ENTRY}\n# resources follow\n`);
+    expectOnlyAdded(before, text);
+  });
+
+  it('is a no-op the second time for a block entry', () => {
+    const once = applyAppend(BASE_KUSTOMIZATION, BLOCK).text;
+    expect(applyAppend(once, BLOCK)).toEqual({ text: once, result: 'already present' });
   });
 });
