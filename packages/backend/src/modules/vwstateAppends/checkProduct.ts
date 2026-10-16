@@ -1,4 +1,5 @@
 import { UrlReaderService } from '@backstage/backend-plugin-api';
+import { GithubCredentialsProvider, ScmIntegrationRegistry } from '@backstage/integration';
 import { createTemplateAction } from '@backstage/plugin-scaffolder-node';
 
 export type TreeFile = { path: string; content: string };
@@ -64,13 +65,65 @@ export function findExistingProductProblems(
   return problems;
 }
 
+/** The environments, of `environments`, where the product has no overlay folder. */
+export function findMissingOverlays(product: string, environments: string[], files: TreeFile[]): string[] {
+  const p = product.toLowerCase();
+  const present = new Set(
+    files
+      .map(f => f.path.split('/'))
+      .filter(parts => parts[0] === 'overlays' && parts[3]?.toLowerCase() === p)
+      .map(parts => parts[2].toLowerCase()),
+  );
+  return environments.filter(e => !present.has(e.toLowerCase()));
+}
+
+export type OpenPull = { head: { ref: string; sha: string; repoFullName?: string }; base: { ref: string } };
+
+/**
+ * The open other-environments PR (a PR 2, branch onboard/<product>-<service>-other-envs)
+ * of the product that a new PR 2 should stack on: the tip of the chain, the one PR 2 that
+ * no other open PR 2 of the product is based on. null when the product has none; an
+ * error when its PR 2s do not form one chain. Only branches of the vwstate repository
+ * itself count.
+ */
+export function findPendingOtherEnvsPull(
+  product: string,
+  repoFullName: string,
+  pulls: OpenPull[],
+): { branch: string; sha: string } | null {
+  const re = new RegExp(`^onboard/${product.toLowerCase().replace(/-/g, '\\-')}-[a-z0-9-]+-other-envs$`);
+  const mine = pulls.filter(
+    pr =>
+      re.test(pr.head.ref.toLowerCase()) &&
+      (pr.head.repoFullName ?? repoFullName).toLowerCase() === repoFullName.toLowerCase(),
+  );
+  if (!mine.length) return null;
+  const bases = new Set(mine.map(pr => pr.base.ref));
+  const tips = mine.filter(pr => !bases.has(pr.head.ref));
+  if (tips.length !== 1) {
+    throw new Error(
+      `Product '${product}' has ${mine.length} open other-environments PRs that are not one chain (${mine
+        .map(pr => pr.head.ref)
+        .join(', ')}); merge or close them so they form one.`,
+    );
+  }
+  return { branch: tips[0].head.ref, sha: tips[0].head.sha };
+}
+
 /**
  * vwstate:check-product — fails the run, before anything is created. With expect: new
  * (the default) it fails when the product already exists in the target vwstate
  * repository. With expect: existing it fails unless the product exists and the service
  * name is free, and outputs hasRouteFile (whether the product has a k8s route file).
+ * Given `environments` too, it finds where a new PR 2 for those environments starts:
+ * the product's open other-environments PR when it has one (outputs pendingBranch and
+ * pendingSha), else master, which must then hold the product's overlay in each of them.
  */
-export function createCheckProductAction(options: { reader: UrlReaderService }) {
+export function createCheckProductAction(options: {
+  reader: UrlReaderService;
+  integrations?: ScmIntegrationRegistry;
+  githubCredentials?: GithubCredentialsProvider;
+}) {
   return createTemplateAction({
     id: 'vwstate:check-product',
     description: 'Fails if a Gemini product already exists in vwstate (folder or gemini-<product> namespace).',
@@ -85,13 +138,44 @@ export function createCheckProductAction(options: { reader: UrlReaderService }) 
         imageName: z => z.string().optional().describe('expect: existing only. Image name that must be free in containers.txt'),
         productRepoUrl: z =>
           z.string().optional().describe('expect: existing only. Blob URL of the product repository, e.g. https://github.com/<owner>/<repo>/blob/master'),
+        environments: z =>
+          z
+            .array(z.string())
+            .optional()
+            .describe('expect: existing only. Environments a new PR 2 adds the workload to; enables pendingBranch and pendingSha'),
       },
       output: {
         hasRouteFile: z => z.boolean().optional().describe('expect: existing only. routing/config/gmn-upr-k8s/routes/<product>.yaml exists'),
+        pendingBranch: z =>
+          z.string().optional().describe("With environments: branch of the product's open other-environments PR to stack on; unset for master"),
+        pendingSha: z => z.string().optional().describe('With environments: head commit of pendingBranch, to read its files at'),
       },
     },
     async handler(ctx) {
       const base = ctx.input.sourceUrl.replace(/\/+$/, '');
+      const findPending = async (product: string) => {
+        const integration = options.integrations?.github.byUrl(base);
+        if (!integration || !options.githubCredentials) throw new Error(`No GitHub integration for ${base}`);
+        const [, owner, repo] = new URL(base).pathname.split('/');
+        const { headers } = await options.githubCredentials.getCredentials({ url: base });
+        const pulls: OpenPull[] = [];
+        for (let page = 1; ; page++) {
+          const res = await fetch(
+            `${integration.config.apiBaseUrl}/repos/${owner}/${repo}/pulls?state=open&per_page=100&page=${page}`,
+            { headers: { ...headers, Accept: 'application/vnd.github+json' } },
+          );
+          if (!res.ok) throw new Error(`Listing the open PRs of ${owner}/${repo} failed: ${res.status} ${res.statusText}`);
+          const batch = (await res.json()) as any[];
+          pulls.push(
+            ...batch.map(pr => ({
+              head: { ref: pr.head.ref, sha: pr.head.sha, repoFullName: pr.head.repo?.full_name },
+              base: { ref: pr.base.ref },
+            })),
+          );
+          if (batch.length < 100) break;
+        }
+        return findPendingOtherEnvsPull(product, `${owner}/${repo}`, pulls);
+      };
       const existing = ctx.input.expect === 'existing';
       const tree = await options.reader.readTree(`${base}/kubernetes`, {
         filter: p => isProductFile(p) || (existing && isWorkloadFile(p)),
@@ -121,6 +205,21 @@ export function createCheckProductAction(options: { reader: UrlReaderService }) 
         const hasRouteFile = (await routes.files()).length > 0;
         ctx.logger.info(`Product '${ctx.input.product}' exists and '${service}' is free; route file: ${hasRouteFile}.`);
         ctx.output('hasRouteFile', hasRouteFile);
+        if (ctx.input.environments?.length) {
+          const pending = await findPending(ctx.input.product);
+          if (pending) {
+            ctx.logger.info(`PR 2 stacks on the product's open other-environments PR: ${pending.branch} (${pending.sha.slice(0, 7)}).`);
+            ctx.output('pendingBranch', pending.branch);
+            ctx.output('pendingSha', pending.sha);
+          } else {
+            const missing = findMissingOverlays(ctx.input.product, ctx.input.environments, files);
+            if (missing.length) {
+              throw new Error(
+                `Cannot add '${service}' to '${ctx.input.product}': the product has no overlay in ${missing.join(', ')} on master and no open other-environments PR to add to.`,
+              );
+            }
+          }
+        }
         return;
       }
 
